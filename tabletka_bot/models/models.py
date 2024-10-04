@@ -10,4 +10,5 @@ class Reminder(models.Model):
     day = models.IntegerField(default=10)
     hour = models.IntegerField()
     minute = models.IntegerField()
-    med = models.CharField(max_length=100) 
+    med = models.CharField(max_length=100)
+    add = models.CharField(max_length=100)
