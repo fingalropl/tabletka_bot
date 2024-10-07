@@ -15,8 +15,8 @@ def dynamic_import(module):
     return importlib.import_module(module)
 #загрузка констант
 load_dotenv()   
+PASSWORD = os.getenv('PASSWORD')
 TG_TOKEN = os.getenv('TG_TOKEN')
-
 #запуск планировщика в фоне
 background_scheduler  = BackgroundScheduler()
 background_scheduler.start()
@@ -32,19 +32,54 @@ inline1.add(ik,ik2)
 
 #начальная клава
 keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
-item3 = types.KeyboardButton("Создание напоминания  ")
-item2 = types.KeyboardButton("Просмотр напоминания приема ")
-item1 = types.KeyboardButton('/start')
-keyboard.add(item1, item2, item3)
+item4 = types.KeyboardButton("Создание напоминания")
+item3 = types.KeyboardButton("Просмотр напоминания приема")
+item2 = types.KeyboardButton("Удаление напоминаний")
+item1 = types.KeyboardButton('В начало!')
+keyboard.add(item1, item2, item3, item4)
 @bot.message_handler(commands=['start'])
 def welcome(message):
-    bot.send_message(message.chat.id, reply_markup = keyboard, protect_content = True, text ="1-я чтобы попробовать начать сначала.\n." 
-                                                                                                                 "\n3-я кнопка для индетификации")
+    bot.send_message(message.chat.id, reply_markup = keyboard, protect_content = True, text ="Привет! Там кнопочки снизу. Они могут добавить, удалить и посмотреть все твои напоминания.")
     
+@bot.message_handler(commands=['copy'])
+def copy_base_reminder(message):
+    if str(message.chat.id) == PASSWORD:
+        response = (requests.get(f'{BASE_URL}')).json()
+        for i in response:
+            username=i.get('chat')
+            day_number = i.get('day')
+            hour = i.get('hour')
+            minute = i.get('minute')
+            drug_name= i.get('med')
+            intruction = i.get('add')
+            id_last_user_remind = i.get('id') #берем ток id
+            if day_number == 10:
+                background_scheduler.add_job(send_remind, 'cron',hour=hour, minute=minute, id=str(id_last_user_remind), args=(username,drug_name,intruction))
+            else:
+                background_scheduler.add_job(send_remind, 'cron', day_of_week=day_number, hour=hour, minute=minute, id=str(id_last_user_remind), args=(username,drug_name,intruction))
+            print(f'в расписание занесено{username}, принимает {drug_name} по {day_number} в {hour}:{minute}, доп инфа {intruction}')
+        bot.send_message(message.chat.id, text=f'Успешно добавлено {len(response)} записей в расписания')
+    else:
+        bot.send_message(message.chat.id, text='У вас нет дотуступа к команде')
+
 @bot.message_handler(content_types=["text"])
 def distribution(message):
     if message.text == 'Создание напоминания':
         bot.send_message(message.chat.id, text='Выберите периодичность приема лекарства:', reply_markup=inline1)
+    elif message.text == 'Просмотр напоминания приема':
+        mes = api_list_remind(message)
+        x = ''.join(mes.keys())
+        bot.send_message(message.chat.id, text=f'{x}')
+    elif message.text == 'Удаление напоминаний':
+        bot.send_message(message.chat.id,text='Чтобы удалить напоминание напишите его айди.')
+        x=''
+        query = api_list_remind(message)
+        for key,value in query.items():
+            x = x + f'{key}.\n Айди напоминания: {value}\n\n'
+        bot.send_message(message.chat.id,text=x)
+        bot.register_next_step_handler(message, api_delete)
+    elif message.text == 'В начало!':
+        welcome(message)
 
 @bot.callback_query_handler(func=lambda call: True)
 def answer(call):
@@ -62,7 +97,7 @@ def create_remind(message,k):
         times = parts[1].split(',')  # ['10:00', '11:00']
         instruction = parts[2]  # По две таблетки, запивая водой
         api_create_remind(message.chat.id,k,drug_name,times,instruction, weekday = 0)
-        bot.send_message(message.chat.id, text=f'Название препарата-{drug_name}, время приема - {times}, доп. информация - {instruction}')
+        bot.send_message(message.chat.id, text=f'Запомнил!Ежедневно буду напоминать о приеме {drug_name}, жди сообщения в {times}, доп. инфа - {instruction}')
         #было бы славно добавить кнопки типо проверьте что верно, если не верно то обратно заново.
     elif k == 'inweek' and len(parts) == 4:
         drug_name = parts[0]  # Анальгин
@@ -70,6 +105,8 @@ def create_remind(message,k):
         times = parts[2].split(',')  # ['10:00', '11:00']
         instruction = parts[3]  # По две таблетки, запивая водой
         api_create_remind(message.chat.id,k,drug_name,times,instruction, weekday)
+        bot.send_message(message.chat.id, text=f'Запомнил!Каждые {weekday} буду напоминать о приеме {drug_name}, жди сообщения в {times}, доп. инфа - {instruction}')
+
     else:
         send_message(message, ' Что-то пошло не так, попробуйте заново написать сообщение, свертесь с примером')
         bot.register_next_step_handler(message, create_remind, k)
@@ -87,7 +124,6 @@ def api_create_remind(username,k,drug_name,times,intruction, weekday):
             id_last_user_remind = (response[-1]).get('id') #берем ток id
             start_remind(username,drug_name,hour,minute,intruction,id_last_user_remind,k, day_number=0)
     if k == 'inweek':
-        #остановился тут, вроде все работает. 
         for day_name in weekday:
             temp=day_name.lower().replace(' ', '')
             day_number = WEEKDAYNUMBER.get(f'{temp}')
@@ -99,15 +135,51 @@ def api_create_remind(username,k,drug_name,times,intruction, weekday):
                 response = (requests.get(f'{BASE_URL}?chat={username}')).json()
                 id_last_user_remind = (response[-1]).get('id') #берем ток id
                 start_remind(username,drug_name,hour,minute,intruction,id_last_user_remind,k,day_number)
+
 def start_remind(username,drug_name,hour,minute,intruction,id_last_user_remind,k,day_number):
     if k == 'everyday':
         background_scheduler.add_job(send_remind, 'cron',hour=hour, minute=minute, id=str(id_last_user_remind), args=(username,drug_name,intruction))
     elif k == 'inweek':
         background_scheduler.add_job(send_remind, 'cron', day_of_week=day_number, hour=hour, minute=minute, id=str(id_last_user_remind), args=(username,drug_name,intruction))
 
+def api_list_remind(message):
+    response = (requests.get(f'{BASE_URL}?chat={message.chat.id}')).json()
+    if not response:
+        bot.send_message(message.chat.id,text='У вас еще нет напоминаний, самое время их создать!')
+    mes = {}
+    for i in response:
+        id = i.get('id')
+        day = i.get('day')
+        if day != 10:        
+            day_name = 'в ' + str([i for i in WEEKDAYNUMBER.keys()].pop(day))
+        else:
+            day_name='ежедневно'
+        hour = i.get('hour')
+        hour = f'0{hour}' if hour < 10 else hour
+        minute =i.get('minute')
+        minute= f'0{minute}' if minute < 10 else minute
+        med = i.get('med')
+        add = i.get('add')
+        print(f'Вы принимаете {day_name} в {hour}:{minute} {med}, доп инфа: {add}{id}')
+        mes.update({f'Вы принимаете {day_name} в {hour}:{minute} {med}, доп инфа: {add}\n':f'{id}'})
+    print(mes)
+    return mes
+
+def api_delete(message):
+    if message.text.isdigit():
+        background_scheduler.remove_job(f'{message.text}')
+        response = requests.delete(f'{BASE_URL}', json={'id':f'{message.text}'})
+        if response.status_code == 200:
+            bot.send_message(message.chat.id, text=f'Повезло, вроде реально удалилось!')
+
+        print(response.status_code)
+    else:
+        bot.send_message(message.chat.id, protect_content = True, text=f'Так как это не цифра, бот выдал ошибку, попробуем еще раз.')
+        api_delete(message)
+
 
 def send_remind(username,drug_name,intruction):
-    bot.send_message(username, text=f'Пора принять "{drug_name}", твоя дополнительная информация:"{intruction}"')
+    bot.send_message(username, text=f'Тук-тук!!! Пора принять "{drug_name}", ваша дополнительная информация:"{intruction}"')
 
 def send_message(message,text):
     bot.send_message(message.chat.id, text = text)
