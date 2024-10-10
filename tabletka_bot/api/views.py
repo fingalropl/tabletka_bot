@@ -50,6 +50,8 @@ class ReminderView(APIView):
         id = self.request.data.get('id')
         if id is not None:
             queryset = queryset.filter(pk=id)
+            if not list(queryset):
+                return Response(status.HTTP_404_NOT_FOUND)
             queryset.delete()
             return Response(status.HTTP_200_OK)
         return Response(status.HTTP_404_NOT_FOUND)
